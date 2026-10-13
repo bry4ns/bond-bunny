@@ -675,7 +675,7 @@ void handle_srtla_data(conn_t *c) {
     }
 
     case SRTLA_TYPE_KEEPALIVE:
-      clock_gettime(CLOCK_MONOTONIC, &c->last_delivery_proof);
+      /* Uncorrelated keepalives do not prove data delivery; only earned SRTLA ACKs do. */
       debug("%s (%p): got a keepalive\n", print_addr(&c->src), c);
       return; // don't send to SRT
 
