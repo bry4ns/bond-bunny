@@ -108,6 +108,7 @@ typedef struct conn {
   double rtt_ms;                                // Current smoothed RTT in milliseconds
   uint64_t rtt_samples;                         // Number of RTT samples taken
   time_t last_rtt_update;                       // Last time we received an ACK
+  struct timespec last_delivery_proof;           // Monotonic time of earned ACK or keepalive response
 } conn_t;
 
 // Forward declaration for bitrate functions
@@ -408,48 +409,45 @@ int conn_timed_out(conn_t *c, time_t ts) {
   return (c->last_rcvd + CONN_TIMEOUT) < ts;
 }
 
+/* Keep packets off a stalled uplink while another link still delivers.
+ * Based on irlserver/srtla_send's stalled-link deselection concept.
+ * Do not remove or re-register the stalled link: keepalives can revive it.
+ * Monotonic delivery proof avoids mistaking arbitrary incoming packets for progress.
+ */
+static int conn_stalled(const conn_t *c, const struct timespec *now) {
+  if (c->in_flight_pkts < 32 || c->last_delivery_proof.tv_sec == 0) return 0;
+  int64_t elapsed_ms = ((int64_t)now->tv_sec - c->last_delivery_proof.tv_sec) * 1000
+      + ((int64_t)now->tv_nsec - c->last_delivery_proof.tv_nsec) / 1000000;
+  return elapsed_ms >= 3000;
+}
+
 conn_t *select_conn() {
-  conn_t *min_c = NULL;
-  int max_score = -1;
-  int max_window = 0;
-
-  for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (c->window > max_window) {
-      max_window = c->window;
-    }
-  }
-
+  conn_t *best = NULL;
+  int best_score = -1;
   time_t t = 0;
-  if (get_seconds(&t) != 0) return NULL;
+  struct timespec now;
+  if (get_seconds(&t) != 0 || clock_gettime(CLOCK_MONOTONIC, &now) != 0) return NULL;
 
+  /* Only deselect a stalled path if another live path can carry traffic.
+   * Preserve the single-link fallback rather than dropping every packet. */
+  int has_healthy_alternative = 0;
   for (conn_t *c = conns; c != NULL; c = c->next) {
-    /* If we have some very slow links, we may be better off ignoring them
-       However, we'd probably need to periodically re-probe them, otherwise
-       a link disabled due to a momentary glitch might not ever get enabled
-       again unless all the remaining links suffered from high packet loss
-       at some point. */
-    /*if (c->window < max_window / 5) {
-      c->window++;
-      continue;
-    }*/
-
-    if (conn_timed_out(c, t)) {
-      debug("%s (%p): is timed out, ignoring it\n", print_addr(&c->src), c);
-      continue;
+    if (!conn_timed_out(c, t) && !conn_stalled(c, &now)) {
+      has_healthy_alternative = 1;
+      break;
     }
-
+  }
+  for (conn_t *c = conns; c != NULL; c = c->next) {
+    if (conn_timed_out(c, t)) continue;
+    if (has_healthy_alternative && conn_stalled(c, &now)) continue;
     int score = c->window / (c->in_flight_pkts + 1);
-    if (score > max_score) {
-      min_c = c;
-      max_score = score;
+    if (score > best_score) {
+      best = c;
+      best_score = score;
     }
   }
-
-  if (min_c) {
-    min_c->last_sent = t;
-  }
-
-  return min_c;
+  if (best) best->last_sent = t;
+  return best;
 }
 
 void handle_srt_data(int fd) {
@@ -543,6 +541,7 @@ void register_srtla_ack(int32_t ack) {
         }
         c->rtt_samples++;
         c->last_rtt_update = time(NULL);  // Track when we last received an ACK
+        c->last_delivery_proof = now;
         
         c->pkt_log[i] = -1;
 
@@ -676,6 +675,7 @@ void handle_srtla_data(conn_t *c) {
     }
 
     case SRTLA_TYPE_KEEPALIVE:
+      clock_gettime(CLOCK_MONOTONIC, &c->last_delivery_proof);
       debug("%s (%p): got a keepalive\n", print_addr(&c->src), c);
       return; // don't send to SRT
 
@@ -798,6 +798,7 @@ int setup_conns(char *source_ip_file) {
           c->rtt_ms = 0;
           c->rtt_samples = 0;
           c->last_rtt_update = 0;
+          memset(&c->last_delivery_proof, 0, sizeof(c->last_delivery_proof));
           for (int i = 0; i < PKT_LOG_SZ; i++) c->pkt_log[i] = -1;
           if (pending_reg2_conn == c) pending_reg2_conn = NULL;
         }
