@@ -86,6 +86,30 @@ int main(void) {
     assert(cellular->fd == cellular_fd && cellular->in_flight_pkts == 7);
     assert(cellular->window == cell_window);
 
+    // A stalled cellular data path must not steal packets from a healthy Wi-Fi link.
+    // Keepalive/earned ACK can revive the cellular scheduler without reconnecting SRT.
+    struct timespec monotonic_now;
+    assert(clock_gettime(CLOCK_MONOTONIC, &monotonic_now) == 0);
+    wifi->last_rcvd = cellular->last_rcvd = now;
+    wifi->in_flight_pkts = 1;
+    cellular->in_flight_pkts = 40;
+    wifi->last_delivery_proof = monotonic_now;
+    cellular->last_delivery_proof = monotonic_now;
+    cellular->last_delivery_proof.tv_sec -= 4;
+    assert(conn_stalled(cellular, &monotonic_now));
+    assert(!conn_stalled(wifi, &monotonic_now));
+    assert(select_conn() == wifi);
+    // Fresh keepalive response makes the stalled link eligible again.
+    cellular->last_delivery_proof = monotonic_now;
+    assert(!conn_stalled(cellular, &monotonic_now));
+    // Even if all paths stall, preserve single-link fallback.
+    wifi->in_flight_pkts = 40;
+    wifi->last_delivery_proof.tv_sec -= 4;
+    cellular->last_delivery_proof.tv_sec -= 4;
+    assert(select_conn() != NULL);
+    wifi->in_flight_pkts = 0;
+    cellular->in_flight_pkts = 7;
+
     // A failed leg must not set aggregate reconnecting while cellular is healthy.
     struct sockaddr_in *destination = (struct sockaddr_in *)&srtla_addr;
     destination->sin_family = AF_INET;
