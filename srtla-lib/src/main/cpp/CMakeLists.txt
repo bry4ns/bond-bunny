@@ -10,7 +10,7 @@ set(SRTLA_DIR ${CMAKE_SOURCE_DIR}/../../../../srtla)
 # Build SRTLA with Android patches - minimal JNI wrapper + original code
 add_library(srtla_android SHARED
     srtla_android_jni.cpp      # Minimal JNI wrapper
-    ${SRTLA_DIR}/srtla_send.c  # Original SRTLA with Android patches
+    srtla_send_android.c      # Pinned Android sender with network handover fixes
     ${SRTLA_DIR}/common.c      # Original SRTLA common functions
 )
 
@@ -29,3 +29,4 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size
 target_include_directories(srtla_android PRIVATE ${SRTLA_DIR})
 
 target_link_libraries(srtla_android ${log-lib})
+

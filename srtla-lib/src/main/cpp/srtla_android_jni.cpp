@@ -56,7 +56,17 @@ extern "C" {
     void srtla_on_connection_established();
     void srtla_notify_network_change();
     void srtla_clear_all_sockets();
+    void srtla_lock_connections();
+    void srtla_unlock_connections();
 }
+
+class SrtlaConnectionsGuard {
+public:
+    SrtlaConnectionsGuard() { srtla_lock_connections(); }
+    ~SrtlaConnectionsGuard() { srtla_unlock_connections(); }
+    SrtlaConnectionsGuard(const SrtlaConnectionsGuard&) = delete;
+    SrtlaConnectionsGuard& operator=(const SrtlaConnectionsGuard&) = delete;
+};
 
 static pthread_t srtla_thread;
 static std::atomic<bool> srtla_running(false);
@@ -348,6 +358,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_notifyNetworkChange(JNIEnv *env, jcla
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionCount(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     if (!srtla_running) {
         __android_log_print(ANDROID_LOG_INFO, "SRTLA-JNI", "getConnectionCount: SRTLA not running");
         return 0;
@@ -359,6 +370,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionCount(JNIEnv *env, jclas
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getActiveConnectionCount(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     if (!srtla_running) {
         return 0;
     }
@@ -369,6 +381,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_getActiveConnectionCount(JNIEnv *env,
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getTotalInFlightPackets(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     if (!srtla_running) {
         return 0;
     }
@@ -381,6 +394,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_getTotalInFlightPackets(JNIEnv *env, 
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getAllStats(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     if (!srtla_running.load()) {
         return env->NewStringUTF("");
     }
@@ -455,6 +469,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_getAllStats(JNIEnv *env, jclass clazz
 // Update isRetrying to check both retry count and reconnecting flag
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_isRetrying(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     if (!srtla_running.load()) {
         return JNI_FALSE;
     }
@@ -579,6 +594,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_closeSocketNative(JNIEnv *env, jclass
 // Per-connection bitrate JNI functions
 extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionBitrates(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     const int MAX_CONNECTIONS = 10;
     double bitrates[MAX_CONNECTIONS];
     char connection_types[MAX_CONNECTIONS][16];
@@ -600,6 +616,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionBitrates(JNIEnv *env, jc
 
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionTypes(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     const int MAX_CONNECTIONS = 10;
     double bitrates[MAX_CONNECTIONS];
     char connection_types[MAX_CONNECTIONS][16];
@@ -626,6 +643,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionTypes(JNIEnv *env, jclas
 
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionIPs(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     const int MAX_CONNECTIONS = 10;
     double bitrates[MAX_CONNECTIONS];
     char connection_types[MAX_CONNECTIONS][16];
@@ -652,6 +670,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionIPs(JNIEnv *env, jclass 
 
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionLoadPercentages(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     const int MAX_CONNECTIONS = 10;
     double bitrates[MAX_CONNECTIONS];
     char connection_types[MAX_CONNECTIONS][16];
@@ -674,6 +693,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionLoadPercentages(JNIEnv *
 // New JNI functions for comprehensive window data
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionWindowSizes(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     const int MAX_CONNECTIONS = 10;
     double bitrates[MAX_CONNECTIONS];
     char connection_types[MAX_CONNECTIONS][16];
@@ -698,6 +718,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionWindowSizes(JNIEnv *env,
 
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionInFlightPackets(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     const int MAX_CONNECTIONS = 10;
     double bitrates[MAX_CONNECTIONS];
     char connection_types[MAX_CONNECTIONS][16];
@@ -722,6 +743,7 @@ Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionInFlightPackets(JNIEnv *
 
 extern "C" JNIEXPORT jbooleanArray JNICALL
 Java_com_dimadesu_bondbunny_NativeSrtlaJni_getConnectionActiveStatus(JNIEnv *env, jclass clazz) {
+    SrtlaConnectionsGuard connectionsGuard;
     const int MAX_CONNECTIONS = 10;
     double bitrates[MAX_CONNECTIONS];
     char connection_types[MAX_CONNECTIONS][16];
