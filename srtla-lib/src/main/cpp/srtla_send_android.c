@@ -95,6 +95,8 @@ typedef struct conn {
 #endif
   int removed;
   int in_flight_pkts;
+  int nak_penalty; // 0..70 percent, decays gradually as the path recovers
+  time_t nak_penalty_updated;
   int window;
   int pkt_idx;
   int pkt_log[PKT_LOG_SZ];
@@ -440,7 +442,15 @@ conn_t *select_conn() {
   for (conn_t *c = conns; c != NULL; c = c->next) {
     if (conn_timed_out(c, t)) continue;
     if (has_healthy_alternative && conn_stalled(c, &now)) continue;
-    int score = c->window / (c->in_flight_pkts + 1);
+    /* Prefer the link that actually delivers packets; recent NAKs temporarily
+     * reduce its share rather than relying only on the congestion window. */
+    if (c->nak_penalty_updated == 0) c->nak_penalty_updated = t;
+    if (t > c->nak_penalty_updated) {
+      time_t elapsed = t - c->nak_penalty_updated;
+      c->nak_penalty = max(0, c->nak_penalty - (int)min(elapsed * 8, 70));
+      c->nak_penalty_updated = t;
+    }
+    int score = (c->window / (c->in_flight_pkts + 1)) * (100 - c->nak_penalty) / 100;
     if (score > best_score) {
       best = c;
       best_score = score;
@@ -502,6 +512,7 @@ void register_nak(int32_t packet) {
         c->pkt_log[i] = -1;
         // It might be better to use exponential decay like this
         //c->window = c->window * 998 / 1000;
+        c->nak_penalty = min(70, c->nak_penalty + 8);
         c->window -= WINDOW_DECR;
         c->window = max(c->window, WINDOW_MIN*WINDOW_MULT);
         debug("%s (%p): found NAKed packet %d in the log\n",
