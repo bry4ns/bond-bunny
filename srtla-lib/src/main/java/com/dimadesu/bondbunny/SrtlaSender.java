@@ -11,13 +11,15 @@ import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.PowerManager;
 import android.util.Log;
+import android.util.AtomicFile;
 
 import java.io.File;
-import java.io.FileWriter;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.DatagramSocket;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -58,6 +60,8 @@ public class SrtlaSender {
 
     // Track network ID + IP to avoid redundant socket recreation
     private Map<String, String> networkState = new ConcurrentHashMap<>();
+    // A transport may be replaced before Android delivers onLost for its old Network.
+    private final Map<String, Network> activeNetworks = new ConcurrentHashMap<>();
 
     // Synchronization for waiting for first network connection
     private CountDownLatch firstConnectionLatch = new CountDownLatch(1);
@@ -107,6 +111,7 @@ public class SrtlaSender {
         firstConnectionLatch = new CountDownLatch(1);
         virtualConnections.clear();
         networkState.clear();
+        activeNetworks.clear();
         relayIdToVirtualIp.clear();
         usedRelaySlots.clear();
 
@@ -281,6 +286,13 @@ public class SrtlaSender {
             }
 
             @Override
+            public void onLinkPropertiesChanged(Network network, LinkProperties linkProperties) {
+                // onAvailable may arrive before the IPv4 address is assigned.
+                // Capability changes alone do not reliably report address changes.
+                handleDedicatedNetworkAvailable(network, networkTypeName, "");
+            }
+
+            @Override
             public void onCapabilitiesChanged(Network network, NetworkCapabilities networkCapabilities) {
                 try {
                     // This fires when network capabilities change (e.g., mobile data toggled back on)
@@ -324,9 +336,6 @@ public class SrtlaSender {
     private synchronized void handleDedicatedNetworkAvailable(Network network, String networkType, String operatorName) {
         try {
             Log.i(TAG, "DEDICATED: Handling " + networkType + " network: " + network);
-            if ("WIFI".equals(networkType)) {
-                wifiNetwork = network;
-            }
             String realIP = getNetworkIP(network);
             Log.i(TAG, "DEDICATED: Real IP for " + networkType + ": " + (realIP != null ? realIP : "NULL"));
 
@@ -361,8 +370,11 @@ public class SrtlaSender {
                     if (socket >= 0) {
                         // Success — now it's safe to replace the previous socket (if any).
                         virtualConnections.put(virtualIP, socket);
-                        networkState.put(stateKey, currentState);
                         NativeSrtlaJni.setNetworkSocket(virtualIP, realIP, networkTypeId, socket);
+                        networkState.keySet().removeIf(key -> key.startsWith(networkType + ":"));
+                        networkState.put(stateKey, currentState);
+                        activeNetworks.put(networkType, network);
+                        if ("WIFI".equals(networkType)) wifiNetwork = network;
                         Log.i(TAG, "DEDICATED: Successfully setup " + networkType + " connection: " + virtualIP + " -> " + realIP + " (socket: " + socket + ")");
 
                         // Signal that we have our first connection
@@ -393,8 +405,13 @@ public class SrtlaSender {
     /**
      * Handle when a dedicated network callback detects a lost network
      */
-    private void handleDedicatedNetworkLost(Network network, String networkType) {
+    private synchronized void handleDedicatedNetworkLost(Network network, String networkType) {
         try {
+            if (!network.equals(activeNetworks.get(networkType))) {
+                Log.i(TAG, "Ignoring loss of replaced " + networkType + " network: " + network);
+                return;
+            }
+            activeNetworks.remove(networkType);
             String virtualIP = getVirtualIPForNetworkType(networkType);
 
             if ("WIFI".equals(networkType)) {
@@ -612,22 +629,22 @@ public class SrtlaSender {
         }
     }
 
-    private File createVirtualIpsFile() throws IOException {
+    private synchronized File createVirtualIpsFile() throws IOException {
         File ipsFile = new File(context.getFilesDir(), "native_srtla_virtual_ips.txt");
-
-        // Delete existing file
-        if (ipsFile.exists()) {
-            ipsFile.delete();
-            Log.i(TAG, "Deleted existing virtual IPs file");
-        }
-
-        try (FileWriter writer = new FileWriter(ipsFile, false)) {
-            // Write only virtual IPs that have active connections
+        // Native update_conns must see either the complete old list or the complete
+        // new list. Truncating/deleting the live file can temporarily remove every link.
+        AtomicFile atomicFile = new AtomicFile(ipsFile);
+        FileOutputStream output = null;
+        try {
+            output = atomicFile.startWrite();
             for (String virtualIP : virtualConnections.keySet()) {
-                writer.write(virtualIP + "\n");
+                output.write((virtualIP + "\n").getBytes(StandardCharsets.US_ASCII));
                 Log.i(TAG, "Writing active virtual IP to file: " + virtualIP);
             }
-            writer.flush();
+            atomicFile.finishWrite(output);
+        } catch (IOException e) {
+            if (output != null) atomicFile.failWrite(output);
+            throw e;
         }
 
         Log.i(TAG, "Created virtual IPs file: " + ipsFile.getAbsolutePath() +
@@ -651,6 +668,7 @@ public class SrtlaSender {
 
         virtualConnections.clear();
         networkState.clear();
+        activeNetworks.clear();
         relayIdToVirtualIp.clear();
         usedRelaySlots.clear();
         wifiNetwork = null;
@@ -761,3 +779,4 @@ public class SrtlaSender {
         }
     }
 }
+
