@@ -1,3 +1,13 @@
+> **PerHost Streaming Lab · Experimental fork**
+>
+> This repository is a public research and testing fork used by **PerHost** to investigate SRTLA bonding reliability on Android. Development focuses on resilient Wi-Fi/mobile handovers, packet-loss handling, stalled-link recovery, and real-world mobile streaming performance.
+>
+> Changes are experimental and validated incrementally through automated checks and PerHost field tests. They are not guaranteed to be production-ready.
+>
+> **Upstream attribution:** Based on [Bond Bunny by dimadesu](https://github.com/dimadesu/bond-bunny). Original authorship and applicable licenses remain with their respective holders. PerHost maintains only its own modifications.
+>
+> The PerHost Android application and its APK builds are maintained separately in a private repository.
+
 # Bond Bunny. SRT to SRTLA Bonding App for Android
 
 [<img src="docs/google-play-store.svg">](https://play.google.com/store/apps/details?id=com.dimadesu.bondbunny)
